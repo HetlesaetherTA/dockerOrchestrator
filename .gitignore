@@ -1,8 +1,1 @@
-# Env
-.env
-.env.*
-
-!.env.dev
-
-# Database 
-.db
+tmp

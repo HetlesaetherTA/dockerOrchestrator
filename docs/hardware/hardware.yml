@@ -1,0 +1,43 @@
+disks: 
+  - ssd01:
+    uuid: "abcdef01-2345-6789-abcd-ef0123456789" # required
+    ro: false # optional default (read only?)
+    ao: false # optional default (append only?)
+  - hdd01:
+    uuid: "abcdef01-2345-6789-abcd-ef0123456789"
+  - hdd02:
+    uuid: "abcdef01-2345-6789-abcd-ef0123456789"
+
+mounts:
+  - media: 
+    source: "${ssd01}/media" # required
+    dest: "/srv/media" # required
+  - data: 
+    source: "${ssd01}/data"
+    dest: "/srv/dockerOrchistrator/data"
+  - blueprints: 
+    source: "${ssd01}/blueprints"
+    dest: "/srv/dockerOrchistrator/blueprints"
+  - movies: 
+    source: "${hdd01}/movies"
+    dest: "/srv/media/movies"
+  - tvshows: 
+    source: "${hdd01}/tvshows"
+    dest: "/srv/media/tvshows"
+  - backups:
+    source: "${hdd02}/backup"
+    dest: "/mnt/backup"
+
+networks:
+  - database-nw:
+    driver: "bridge" # optional default
+    internal: true # optional default
+    external: false # optional default
+    attachable: true # optional default
+    ipv4: true # optional default
+    ipv6: false # optional default 
+    description: "" # optional default
+  - proxy-nw:
+    external: true
+    description: "caddy network w/ TLS & reverse proxy"
+

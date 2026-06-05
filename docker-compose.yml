@@ -1,0 +1,20 @@
+services:
+  dev:
+    container_name: dockerOrchestrator-dev
+    build:
+      context: .
+      target: dev 
+    volumes:
+      - .:/app
+      - /tmp/dockerOrchestrator:/srv
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "3000:3000" 
+    env_file: .env
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: dozzle
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro 
+    ports:
+      - "42069:8080" 
