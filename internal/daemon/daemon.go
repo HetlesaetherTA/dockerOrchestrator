@@ -1,28 +1,35 @@
 package daemon
 
 import (
-	"fmt"
-	"hetlesaether.com/dockerOrchestrator/internal/fs"
+	"context"
 	"log/slog"
 	"os"
-	"strings"
-	// "hetlesaether.com/dockerOrchestrator/internal/docker"
+
+	"hetlesaether.com/dockerOrchestrator/internal/docker"
+	"hetlesaether.com/dockerOrchestrator/internal/infra"
 )
 
-type test struct {
-	Test string
-}
-
 func Start() {
-	env := os.Getenv("APP_ENV")
+	slog.Info("Starting application daemon")
 
-	if strings.TrimSpace(env) == "" {
-		env = "dev"
+	infraPath := os.Getenv("APP_PATH") + "/infra.yml"
+	infraRepository, err := infra.NewFromYAML(infraPath)
+
+	if err != nil {
+		slog.Error("Failed to get or parse infrastructure from yaml", "error", err)
 	}
 
-	slog.Info("Starting application daemon", "environment", env)
+	slog.Info("Found infrastructure from YAML", "read from", infraPath, "infra", infraRepository)
 
-	var t test
-	fmt.Println(fs.ConstructFromYAML(t, os.Getenv("APP_PATH")+"/hardware.yml"))
-	fmt.Println(t.Test)
+	dockerAPI, err := docker.New()
+
+	if err != nil {
+		slog.Error("Failed to initiate docker API Client", "error", err)
+	}
+
+	blueprints := SyncBlueprintsInSource()
+	container, err := dockerAPI.CreateContainer(context.Background(), blueprints[0].Name, blueprints[0])
+
+	slog.Info("Created Container", "container", container, "err", err)
+
 }

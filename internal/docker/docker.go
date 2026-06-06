@@ -3,13 +3,15 @@ package docker
 import (
 	"context"
 	"fmt"
+	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	"hetlesaether.com/dockerOrchestrator/internal/domain"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
-
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/client"
-	"hetlesaether.com/dockerOrchestrator/internal/domain"
 )
 
 type Client struct {
@@ -27,6 +29,50 @@ func New() (*Client, error) {
 	return &Client{
 		dockerAPI: apiClient,
 	}, nil
+}
+
+func (c *Client) CreateContainer(
+	ctx context.Context,
+	name string,
+	blueprint domain.Blueprint,
+) (domain.Container, error) {
+	config, hostConfig := c.MapServiceToMobyConfigs(blueprint)
+
+	slog.Info("Pulling image", "image", config.Image)
+	out, err := c.dockerAPI.ImagePull(ctx, config.Image, client.ImagePullOptions{})
+	if err != nil {
+		return domain.Container{}, fmt.Errorf("failed to pull image %s: %w", config.Image, err)
+	}
+
+	_, _ = io.Copy(io.Discard, out)
+	out.Close()
+
+	opts := client.ContainerCreateOptions{
+		Name:             name,
+		Config:           config,
+		HostConfig:       hostConfig,
+		NetworkingConfig: &network.NetworkingConfig{},
+	}
+
+	resp, err := c.dockerAPI.ContainerCreate(ctx, opts)
+
+	if err != nil {
+		return domain.Container{}, fmt.Errorf("failed to create container: %w", err)
+	}
+
+	res, err := c.dockerAPI.ContainerStart(
+		ctx,
+		resp.ID,
+		client.ContainerStartOptions{},
+	)
+
+	slog.Info("started container", "res", res, "err", err)
+
+	return domain.Container{
+		Name:      name,
+		Blueprint: blueprint,
+		LastKnown: c.GetContainerByID(resp.ID),
+	}, err
 }
 
 // Get all running containers
@@ -66,6 +112,23 @@ func (c *Client) GetContainers() ([]domain.ContainerState, error) {
 	return parseDockerAPIContainerList(res), nil
 }
 
+func (c *Client) GetContainerByID(id string) domain.ContainerState {
+	filters := client.Filters{}.Add("id", id)
+	res, err := fetchContainerList(
+		c,
+		context.Background(),
+		client.ContainerListOptions{
+			All:     true,
+			Filters: filters,
+		})
+
+	if err != nil {
+		return domain.ContainerState{}
+	}
+
+	return parseDockerAPIContainer(res[0])
+}
+
 // Start given container (by ID)
 func (c *Client) StartContainer(container domain.ContainerState) error {
 	_, err := c.dockerAPI.ContainerStart(context.Background(), container.ID, client.ContainerStartOptions{})
@@ -73,7 +136,7 @@ func (c *Client) StartContainer(container domain.ContainerState) error {
 		return fmt.Errorf("failed to start container (%s): %w", container.Name, err)
 	}
 
-	slog.Info("Container sucessfully start", container)
+	slog.Info("Container sucessfully start", "Container", container)
 	return nil
 }
 
@@ -90,41 +153,35 @@ func (c *Client) StopContainer(container domain.ContainerState) error {
 	if err != nil {
 		return fmt.Errorf("Failed to stop container ID(%s): %w", container.ID, err)
 	}
-[]
 	slog.Info("Container successfully stopped", "id", container.ID, "name", container.Name)
 	return nil
 }
 
-// Find containers with labals: homepage.name is defined
-func (c *Client) ScanForKnownContainers() (map[string]domain.ContainerState, error) {
-	queryFilters := client.Filters{}
-	queryFilters.Add("label", "homepage.name")
-
-	containers, err := fetchContainerList(
-		c,
-		context.Background(),
-		client.ContainerListOptions{
-			All:     true,
-			Filters: queryFilters,
-		})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to list containers by label: %w", err)
+func (c *Client) MapServiceToMobyConfigs(blueprint domain.Blueprint) (*container.Config, *container.HostConfig) {
+	var image string
+	if image = blueprint.Image; image == "" {
+		image = "" // TODO: Build image
 	}
 
-	tmp := make(map[string]domain.ContainerState)
-
-	for _, c := range containers {
-		if labelValue, exists := c.Labels["homepage.name"]; exists {
-			tmp[labelValue] = parseDockerAPIContainer(c)
-		}
+	mobyConfig := &container.Config{
+		Image:        image,
+		Cmd:          blueprint.Command,
+		Env:          blueprint.Environment.ToMapping().Values(),
+		Labels:       blueprint.Labels,
+		ExposedPorts: buildExposedPorts(blueprint),
 	}
 
-	return tmp, nil
+	mobyHostConfig := &container.HostConfig{
+		RestartPolicy: container.RestartPolicy{
+			Name: container.RestartPolicyMode("no"),
+		},
+		Binds:   buildVolumeBinds(blueprint.Volumes),
+		CapAdd:  blueprint.CapAdd,
+		CapDrop: blueprint.CapDrop,
+	}
 
+	return mobyConfig, mobyHostConfig
 }
-
-// Private functions
 
 func parseDockerAPIContainerList(c []container.Summary) []domain.ContainerState {
 	tmp := make([]domain.ContainerState, len(c))
@@ -159,4 +216,51 @@ func parseDockerAPIContainer(c container.Summary) domain.ContainerState {
 		Name:    name,
 		Updated: time.Now(),
 	}
+}
+
+func buildExposedPorts(blueprint domain.Blueprint) network.PortSet {
+	exposedPorts := make(network.PortSet)
+
+	for _, portConfig := range blueprint.ServiceConfig.Ports {
+		protocol := portConfig.Protocol
+		if protocol == "" {
+			protocol = "tcp"
+		}
+
+		portNum := uint16(portConfig.Target)
+
+		mobyPort, ok := network.PortFrom(portNum, network.IPProtocol(protocol))
+		if !ok {
+			continue
+		}
+
+		exposedPorts[mobyPort] = struct{}{}
+	}
+
+	return exposedPorts
+}
+
+func buildVolumeBinds(volumeConfigs []types.ServiceVolumeConfig) []string {
+	var binds []string
+
+	for _, vol := range volumeConfigs {
+		if vol.Target == "" {
+			continue
+		}
+
+		if vol.Source == "" {
+			continue
+		}
+
+		bindStr := fmt.Sprintf("%s:%s", vol.Source, vol.Target)
+
+		// TODO: support ":ao" (append only)
+		if vol.ReadOnly {
+			bindStr += ":ro"
+		}
+
+		binds = append(binds, bindStr)
+	}
+
+	return binds
 }

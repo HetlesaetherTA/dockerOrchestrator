@@ -5,7 +5,7 @@
 
 set -e
 
-echo "📦 Packaging and deploying Go Orchestrator..."
+echo "Packaging and deploying Go Orchestrator..."
 
 # 1. Compile the app
 go build -o dockerOrchestrator ./cmd/dockerOrchestrator/dockerOrchestrator.go
