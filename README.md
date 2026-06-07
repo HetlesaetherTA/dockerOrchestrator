@@ -3,7 +3,7 @@
 ### Start:
 
 #### Warning!:
-- Dev runs in containerized environment, it can change docker containers state, but not alter host fs
+- Dev runs in containerized environment, it can change docker containers state, but not alter host fs (aside from provided directories (default `/tmp/dockerOrchistrator`)
 - Prod runs directly on host, use with caution.
 
 ```bash
